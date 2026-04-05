@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import certifi
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
@@ -15,7 +16,15 @@ def get_client() -> MongoClient:
 
 	if _client is None:
 		settings = get_settings()
-		_client = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=5000)
+		client_kwargs: dict[str, object] = {
+			"serverSelectionTimeoutMS": settings.mongo_server_selection_timeout_ms,
+		}
+
+		if settings.mongo_uri.startswith("mongodb+srv://"):
+			# Explicitly provide CA bundle for TLS verification in containerized deploys.
+			client_kwargs["tlsCAFile"] = certifi.where()
+
+		_client = MongoClient(settings.mongo_uri, **client_kwargs)
 	return _client
 
 

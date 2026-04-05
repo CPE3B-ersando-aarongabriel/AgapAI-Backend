@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pymongo.errors import PyMongoError
 
 from app.api.v1.endpoints.session import router as session_router
 from app.config.database import close_mongo_connection, get_client
@@ -23,8 +24,21 @@ logger = logging.getLogger("agapai")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
 	# Startup hook where DB connectivity and indexes are initialized.
-	get_client().admin.command("ping")
-	logger.info("MongoDB connection established.")
+	if settings.startup_db_check:
+		try:
+			get_client().admin.command("ping")
+			logger.info("MongoDB connection established.")
+		except PyMongoError as exc:
+			if settings.startup_db_check_strict:
+				logger.exception("MongoDB startup check failed and strict mode is enabled.")
+				raise
+			logger.warning(
+				"MongoDB startup check failed; continuing startup because strict mode is disabled: %s",
+				exc,
+			)
+	else:
+		logger.info("MongoDB startup check disabled by STARTUP_DB_CHECK.")
+
 	logger.info("Starting %s in %s mode", settings.app_name, settings.environment)
 	yield
 	close_mongo_connection()

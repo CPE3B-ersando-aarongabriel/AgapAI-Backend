@@ -60,6 +60,9 @@ Copy `.env.example` to `.env` and set values:
 - `API_PREFIX`
 - `MONGO_URI`
 - `MONGO_DB_NAME`
+- `MONGO_SERVER_SELECTION_TIMEOUT_MS`
+- `STARTUP_DB_CHECK`
+- `STARTUP_DB_CHECK_STRICT`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `ENABLE_AI_PRE_ANALYSIS`
@@ -154,6 +157,12 @@ python scripts/seed_demo.py
 
 Create a Render Web Service with:
 
+- Python version pin:
+
+```text
+.python-version -> 3.13
+```
+
 - Build command:
 
 ```bash
@@ -167,6 +176,12 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
 Set environment variables in Render dashboard (`MONGO_URI`, `OPENAI_API_KEY`, `ENVIRONMENT=production`, etc.).
+
+Recommended startup/deploy values on Render:
+
+- `STARTUP_DB_CHECK=true`
+- `STARTUP_DB_CHECK_STRICT=false` (keeps service booting while Atlas connectivity is being fixed)
+- `MONGO_SERVER_SELECTION_TIMEOUT_MS=8000`
 
 ## Testing
 

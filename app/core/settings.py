@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "AgapAI Backend")
@@ -19,6 +23,9 @@ class Settings:
 
     mongo_uri: str = os.getenv("MONGO_URI", "mongodb://localhost:27017/agapai")
     mongo_db_name: str = os.getenv("MONGO_DB_NAME", "agapai")
+    mongo_server_selection_timeout_ms: int = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
+    startup_db_check: bool = _env_bool("STARTUP_DB_CHECK", True)
+    startup_db_check_strict: bool = _env_bool("STARTUP_DB_CHECK_STRICT", False)
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")

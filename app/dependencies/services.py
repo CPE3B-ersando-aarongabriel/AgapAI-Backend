@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from app.config.database import get_sessions_collection
+from app.config.database import get_session_samples_collection, get_sessions_collection
 from app.repositories.session_repository import SessionRepository
 from app.services.analysis_service import AnalysisService
 from app.services.insight_service import InsightService
@@ -11,7 +11,10 @@ from app.services.session_service import SessionService
 
 @lru_cache
 def _build_service() -> SessionService:
-    repo = SessionRepository(get_sessions_collection())
+    repo = SessionRepository(
+        sessions_collection=get_sessions_collection(),
+        samples_collection=get_session_samples_collection(),
+    )
     repo.ensure_indexes()
     analysis = AnalysisService()
     return SessionService(repository=repo, analysis_service=analysis)
@@ -23,7 +26,10 @@ def get_session_service() -> SessionService:
 
 @lru_cache
 def _build_insight_service() -> InsightService:
-    repo = SessionRepository(get_sessions_collection())
+    repo = SessionRepository(
+        sessions_collection=get_sessions_collection(),
+        samples_collection=get_session_samples_collection(),
+    )
     repo.ensure_indexes()
     return InsightService(repository=repo)
 

@@ -3,22 +3,29 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies.services import get_insight_service, get_session_service
-from app.exceptions.custom_exceptions import NotFoundError
+from app.exceptions.custom_exceptions import ConflictError, NotFoundError
 from app.schemas.insight_schema import InsightChatRequest, InsightChatResponse
 from app.schemas.session_schema import (
 	AdvancedAnalysisRequest,
 	AdvancedAnalysisResponse,
+	DeviceSessionHistoryResponse,
 	DashboardResponse,
 	DeviceDataResponse,
+	SessionChunkRequest,
+	SessionChunkResponse,
+	SessionEndRequest,
+	SessionEndResponse,
 	SensorDataIn,
 	SessionHistoryResponse,
+	SessionLiveStatusResponse,
 	SessionListQuery,
 	SessionRecordResponse,
+	SessionSummaryResponse,
 	SessionStartRequest,
 	SessionStartResponse,
 )
 from app.services.insight_service import InsightContextNotFoundError, InsightService
-from app.services.session_service import SessionNotFoundError, SessionService
+from app.services.session_service import SessionClosedError, SessionNotFoundError, SessionService
 
 
 router = APIRouter(prefix="/api", tags=["Endpoints"])
@@ -43,6 +50,32 @@ def post_session_data(
 		raise NotFoundError(str(exc)) from exc
 
 
+@router.post("/session/chunk", response_model=SessionChunkResponse)
+def post_session_chunk(
+	payload: SessionChunkRequest,
+	service: SessionService = Depends(get_session_service),
+) -> SessionChunkResponse:
+	try:
+		return service.ingest_session_chunk(payload)
+	except SessionNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc
+	except SessionClosedError as exc:
+		raise ConflictError(str(exc)) from exc
+
+
+@router.post("/session/end", response_model=SessionEndResponse)
+def post_session_end(
+	payload: SessionEndRequest,
+	service: SessionService = Depends(get_session_service),
+) -> SessionEndResponse:
+	try:
+		return service.end_session(payload)
+	except SessionNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc
+	except SessionClosedError as exc:
+		raise ConflictError(str(exc)) from exc
+
+
 @router.get("/session/{session_id}", response_model=SessionRecordResponse)
 def get_session(
 	session_id: str,
@@ -50,6 +83,28 @@ def get_session(
 ) -> SessionRecordResponse:
 	try:
 		return service.get_session(session_id)
+	except SessionNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc
+
+
+@router.get("/session/{session_id}/summary", response_model=SessionSummaryResponse)
+def get_session_summary(
+	session_id: str,
+	service: SessionService = Depends(get_session_service),
+) -> SessionSummaryResponse:
+	try:
+		return service.get_session_summary(session_id)
+	except SessionNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc
+
+
+@router.get("/session/{session_id}/live", response_model=SessionLiveStatusResponse)
+def get_session_live(
+	session_id: str,
+	service: SessionService = Depends(get_session_service),
+) -> SessionLiveStatusResponse:
+	try:
+		return service.get_session_live_status(session_id)
 	except SessionNotFoundError as exc:
 		raise NotFoundError(str(exc)) from exc
 
@@ -62,6 +117,16 @@ def list_sessions(
 	service: SessionService = Depends(get_session_service),
 ) -> SessionHistoryResponse:
 	return service.list_sessions(SessionListQuery(limit=limit, skip=skip, device_id=device_id))
+
+
+@router.get("/device/{device_id}/sessions", response_model=DeviceSessionHistoryResponse)
+def get_device_sessions(
+	device_id: str,
+	limit: int = Query(default=20, ge=1, le=100),
+	skip: int = Query(default=0, ge=0),
+	service: SessionService = Depends(get_session_service),
+) -> DeviceSessionHistoryResponse:
+	return service.get_device_history(device_id=device_id, limit=limit, skip=skip)
 
 
 @router.post("/session/{session_id}/advanced", response_model=AdvancedAnalysisResponse)

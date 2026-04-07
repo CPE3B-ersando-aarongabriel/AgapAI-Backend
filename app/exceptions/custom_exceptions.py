@@ -8,3 +8,8 @@ class AppError(Exception):
 class NotFoundError(AppError):
     def __init__(self, message: str):
         super().__init__(message=message, status_code=404)
+
+
+class ConflictError(AppError):
+    def __init__(self, message: str):
+        super().__init__(message=message, status_code=409)

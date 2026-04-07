@@ -11,34 +11,62 @@ AGAPAI backend receives sleep-session telemetry from ESP32, stores session data 
 ## Main Endpoints
 
 - `POST /api/session/start`
-- `POST /api/session/data`
+- `POST /api/session/chunk`
+- `POST /api/session/end`
+- `GET /api/session/{id}/live`
+- `GET /api/session/{id}/summary`
+- `GET /api/device/{device_id}/sessions`
+- `POST /api/session/data` (legacy compatibility)
 - `GET /api/session/{id}`
 - `GET /api/sessions`
 - `POST /api/session/{id}/advanced`
 - `GET /api/dashboard`
 - `POST /api/insight/chat`
 
-## Device-First Flow
+## Streaming Device Flow
 
 1. ESP32 starts a session.
-2. ESP32 can either stream scalar sensor points or buffer interval samples locally during a capture window.
-3. On capture-window end, ESP32 submits one summary payload with optional `capture_samples`.
-4. API returns exactly three short recommendations + breathing pattern guide.
-5. Mobile app reads history and requests advanced analysis on demand.
+2. ESP32 sends lightweight chunk packets every 1-2 seconds to `/api/session/chunk`.
+3. Backend stores chunk samples in a dedicated `session_samples` collection and updates running aggregates in `sessions`.
+4. ESP32 stops session by sending final summary to `/api/session/end`.
+5. Backend finalizes recommendations and stores `device_summary`, `backend_summary`, and `final_summary`.
+6. Mobile app reads live state, summaries, and history without giant payload uploads.
 
-## Capture Window Payload (Optional)
+## Chunk Payload
 
-`POST /api/session/data` accepts either:
+`POST /api/session/chunk` accepts:
 
-- Scalar summary values (`breathing_rate`, `snore_level`, `temperature`, `humidity`), or
-- A non-empty `capture_samples` list where each item includes:
-  - `recorded_at`
-  - `mic_raw`
-  - `temperature`
-  - `humidity`
-  - optional `breathing_rate`, `movement_level`, `presence_detected`
+- `session_id`
+- optional `chunk_id`
+- `samples` list (1..25 items) where each item includes:
+  - `recorded_at`, `mic_raw`, `mic_rms`, `mic_peak`
+  - `temperature`, `humidity`
+  - `breathing_rate`, `movement_level`, `presence_detected`
 
-When `capture_samples` is provided, backend aggregates interval samples into summary values and stores both the aggregate and raw interval list in the session event.
+Backend stores chunk samples as row-like records linked by `session_id`, then updates streaming stats on the session document.
+
+## Session End Payload
+
+`POST /api/session/end` accepts:
+
+- `session_id`
+- optional `ended_at`
+- `summary` with:
+  - `sample_count`
+  - `average_amplitude`, `rms_amplitude`, `peak_intensity`
+  - `snore_event_count`, `snore_score`
+  - `average_breathing_rate`, `average_temperature`, `average_humidity`
+
+Response includes final recommendations + breathing guide.
+
+## Mobile Query Endpoints
+
+- `GET /api/session/{id}/live`
+  - lightweight live counters and running averages while session is active.
+- `GET /api/session/{id}/summary`
+  - finalized summary view (device/backend/final summary blocks).
+- `GET /api/device/{device_id}/sessions`
+  - efficient historical summaries for mobile list screens.
 
 ## Contextual Insight Chat
 

@@ -108,15 +108,26 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/session/start`
   - Creates a new session and returns `session_id`
 
+- `POST /api/session/chunk`
+  - Receives lightweight streamed chunk packets (`session_id`, `samples[]`)
+  - Stores samples in dedicated `session_samples` collection
+  - Updates running aggregates on the session document
+
+- `POST /api/session/end`
+  - Finalizes session with device-side summary metrics
+  - Computes backend summary + final recommendations and breathing guide
+
+- `GET /api/session/{id}/live`
+  - Lightweight live status (`sample_count`, rolling averages, last sample timestamp)
+
+- `GET /api/session/{id}/summary`
+  - Returns finalized summary blocks (`device_summary`, `backend_summary`, `final_summary`)
+
+- `GET /api/device/{device_id}/sessions`
+  - Efficient mobile history listing for one device
+
 - `POST /api/session/data`
-  - Accepts either scalar summary sample or buffered `capture_samples` list.
-  - Scalar example:
-  - `{session_id, breathing_rate, snore_level, temperature, humidity, movement_level?, presence_detected?}`
-  - Capture-window example includes `capture_samples` with per-interval timestamps and `mic_raw`.
-  - Stores sample
-  - Runs pre-analysis
-  - Optionally calls OpenAI
-  - Returns exactly 3 short recommendations + breathing pattern guide
+  - Legacy compatibility endpoint for older firmware payload style
 
 - `GET /api/session/{id}`
   - Returns full single session record

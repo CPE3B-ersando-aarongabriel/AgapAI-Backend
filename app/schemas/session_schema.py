@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -17,6 +17,99 @@ class SessionStartResponse(BaseModel):
 	device_id: str
 	status: Literal["started"]
 	started_at: datetime
+
+
+class SessionChunkSampleIn(BaseModel):
+	recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+	mic_raw: float = Field(..., ge=0.0)
+	mic_rms: float = Field(..., ge=0.0)
+	mic_peak: float = Field(..., ge=0.0)
+	temperature: float = Field(..., ge=5.0, le=45.0)
+	humidity: float = Field(..., ge=0.0, le=100.0)
+	breathing_rate: float = Field(..., ge=0.0, le=60.0)
+	movement_level: float = Field(..., ge=0.0, le=100.0)
+	presence_detected: bool
+
+
+class SessionChunkRequest(BaseModel):
+	session_id: str = Field(..., min_length=8, max_length=64)
+	chunk_id: str | None = Field(default=None, max_length=64)
+	samples: list[SessionChunkSampleIn] = Field(..., min_length=1, max_length=25)
+
+
+class SessionChunkResponse(BaseModel):
+	session_id: str
+	status: Literal["chunk_received"]
+	received_count: int = Field(..., ge=1)
+	total_samples: int = Field(..., ge=1)
+	last_recorded_at: datetime
+
+
+class SessionSummaryMetrics(BaseModel):
+	sample_count: int = Field(..., ge=1)
+	average_amplitude: float = Field(..., ge=0.0)
+	rms_amplitude: float = Field(..., ge=0.0)
+	peak_intensity: float = Field(..., ge=0.0)
+	snore_event_count: int = Field(..., ge=0)
+	snore_score: float = Field(..., ge=0.0, le=100.0)
+	average_breathing_rate: float = Field(..., ge=0.0, le=60.0)
+	average_temperature: float = Field(..., ge=5.0, le=45.0)
+	average_humidity: float = Field(..., ge=0.0, le=100.0)
+
+
+class SessionEndRequest(BaseModel):
+	session_id: str = Field(..., min_length=8, max_length=64)
+	ended_at: datetime | None = None
+	summary: SessionSummaryMetrics
+
+
+class SessionEndResponse(BaseModel):
+	session_id: str
+	status: Literal["ended"]
+	ended_at: datetime
+	final_summary: SessionSummaryMetrics
+	recommendations: list[str] = Field(..., min_length=3, max_length=3)
+	breathing_pattern: BreathingPatternGuide
+	pre_analysis: RuleBasedSummary
+	ai_used: bool = False
+
+
+class SessionLiveStatusResponse(BaseModel):
+	session_id: str
+	device_id: str
+	status: str
+	started_at: datetime
+	updated_at: datetime
+	last_sample_at: datetime | None = None
+	sample_count: int = Field(..., ge=0)
+	average_amplitude: float = Field(..., ge=0.0)
+	rms_amplitude: float = Field(..., ge=0.0)
+	peak_intensity: float = Field(..., ge=0.0)
+	snore_event_count: int = Field(..., ge=0)
+	average_breathing_rate: float = Field(..., ge=0.0, le=60.0)
+	average_temperature: float = Field(..., ge=0.0)
+	average_humidity: float = Field(..., ge=0.0)
+
+
+class SessionSummaryResponse(BaseModel):
+	session_id: str
+	device_id: str
+	status: str
+	started_at: datetime
+	updated_at: datetime
+	ended_at: datetime | None = None
+	sample_count: int = Field(default=0, ge=0)
+	device_summary: SessionSummaryMetrics | None = None
+	backend_summary: SessionSummaryMetrics | None = None
+	final_summary: SessionSummaryMetrics | None = None
+	latest_pre_analysis: dict[str, Any] | None = None
+	latest_device_response: dict[str, Any] | None = None
+
+
+class DeviceSessionHistoryResponse(BaseModel):
+	device_id: str
+	total: int
+	sessions: list[SessionSummaryResponse]
 
 
 class CaptureSampleIn(BaseModel):

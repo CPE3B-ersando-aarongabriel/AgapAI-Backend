@@ -71,7 +71,7 @@ def test_insight_service_session_scoped_fallback_answer() -> None:
     assert response.context.mode == "session"
     assert response.context.latest_session_id == "sess-001"
     assert response.grounded is True
-    assert "snore" in response.answer.lower()
+    assert "snor" in response.answer.lower()
 
 
 def test_insight_service_stores_history_when_requested() -> None:

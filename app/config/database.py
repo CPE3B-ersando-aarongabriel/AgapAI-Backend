@@ -37,6 +37,10 @@ def get_sessions_collection() -> Collection:
 	return get_database()["sessions"]
 
 
+def get_session_samples_collection() -> Collection:
+	return get_database()["session_samples"]
+
+
 def close_mongo_connection() -> None:
 	global _client
 	if _client is not None:

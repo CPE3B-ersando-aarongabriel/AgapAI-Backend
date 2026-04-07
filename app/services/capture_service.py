@@ -7,6 +7,8 @@ from typing import Any
 
 MIC_NOISE_FLOOR = 120.0
 MIC_LOUD_LEVEL = 2500.0
+MIC_NOISE_FLOOR_SCALED = 8.0
+MIC_LOUD_LEVEL_SCALED = 90.0
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,19 @@ def _majority_true(values: list[bool], fallback: bool = True) -> bool:
 def _normalize_snore_from_mic(avg_mic_raw: float) -> float:
     normalized = ((avg_mic_raw - MIC_NOISE_FLOOR) / (MIC_LOUD_LEVEL - MIC_NOISE_FLOOR)) * 100.0
     return _clamp(normalized, 0.0, 100.0)
+
+
+def _resolve_mic_scale(mic_values: list[float]) -> tuple[float, float]:
+    if not mic_values:
+        return MIC_NOISE_FLOOR_SCALED, MIC_LOUD_LEVEL_SCALED
+
+    peak = max(mic_values)
+    # New firmware emits mic metrics in a normalized 0-100 range.
+    if peak <= 120.0:
+        return MIC_NOISE_FLOOR_SCALED, MIC_LOUD_LEVEL_SCALED
+
+    # Legacy uploads may still send larger raw ranges.
+    return MIC_NOISE_FLOOR, MIC_LOUD_LEVEL
 
 
 def _rms(values: list[float], fallback: float) -> float:
@@ -79,12 +94,15 @@ def aggregate_capture_samples(samples: list[dict[str, Any]]) -> CaptureAggregati
     rms_mic = max(0.0, _rms(mic_rms_values or mic_values, fallback=0.0))
     peak_mic = max(mic_peak_values or mic_values) if (mic_peak_values or mic_values) else 0.0
 
-    event_threshold = max(MIC_NOISE_FLOOR * 1.5, avg_mic_raw * 1.35)
+    mic_floor, mic_loud = _resolve_mic_scale(mic_values)
+    mic_span = max(mic_loud - mic_floor, 1.0)
+
+    event_threshold = max(mic_floor * 1.5, avg_mic_raw * 1.35)
     snore_event_count = sum(1 for value in mic_values if value >= event_threshold)
 
-    amp_norm = _clamp((avg_mic_raw - MIC_NOISE_FLOOR) / (MIC_LOUD_LEVEL - MIC_NOISE_FLOOR), 0.0, 1.0)
-    rms_norm = _clamp((rms_mic - MIC_NOISE_FLOOR) / (MIC_LOUD_LEVEL - MIC_NOISE_FLOOR), 0.0, 1.0)
-    peak_norm = _clamp((peak_mic - MIC_NOISE_FLOOR) / ((MIC_LOUD_LEVEL * 1.5) - MIC_NOISE_FLOOR), 0.0, 1.0)
+    amp_norm = _clamp((avg_mic_raw - mic_floor) / mic_span, 0.0, 1.0)
+    rms_norm = _clamp((rms_mic - mic_floor) / mic_span, 0.0, 1.0)
+    peak_norm = _clamp((peak_mic - mic_floor) / max((mic_loud * 1.5) - mic_floor, 1.0), 0.0, 1.0)
     density_norm = _clamp(snore_event_count / max(len(normalized_samples), 1), 0.0, 1.0)
 
     snore_score = round((0.35 * amp_norm + 0.25 * rms_norm + 0.25 * peak_norm + 0.15 * density_norm) * 100.0, 2)

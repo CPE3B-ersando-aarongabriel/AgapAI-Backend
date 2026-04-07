@@ -123,6 +123,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `GET /api/session/{id}/summary`
   - Returns finalized summary blocks (`device_summary`, `backend_summary`, `final_summary`)
 
+- `GET /api/session/{id}/samples`
+  - Returns paged streamed samples for charting/debug (`limit`, `skip`)
+
 - `GET /api/device/{device_id}/sessions`
   - Efficient mobile history listing for one device
 
@@ -131,6 +134,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - `GET /api/session/{id}`
   - Returns full single session record
+  - Includes legacy-compatible `sensor_events` projection from streamed samples
 
 - `GET /api/sessions`
   - Session history for mobile app (`limit`, `skip`, optional `device_id`)

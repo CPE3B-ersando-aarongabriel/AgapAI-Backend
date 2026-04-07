@@ -112,6 +112,26 @@ class DeviceSessionHistoryResponse(BaseModel):
 	sessions: list[SessionSummaryResponse]
 
 
+class SessionSampleRecord(BaseModel):
+	recorded_at: datetime
+	mic_raw: float = Field(..., ge=0.0)
+	mic_rms: float = Field(..., ge=0.0)
+	mic_peak: float = Field(..., ge=0.0)
+	temperature: float = Field(..., ge=0.0)
+	humidity: float = Field(..., ge=0.0, le=100.0)
+	breathing_rate: float = Field(..., ge=0.0, le=60.0)
+	movement_level: float = Field(..., ge=0.0, le=100.0)
+	presence_detected: bool
+	received_at: datetime
+	chunk_id: str | None = None
+
+
+class SessionSamplesPageResponse(BaseModel):
+	session_id: str
+	total: int
+	samples: list[SessionSampleRecord]
+
+
 class CaptureSampleIn(BaseModel):
 	recorded_at: datetime
 	mic_raw: float = Field(..., ge=0.0)

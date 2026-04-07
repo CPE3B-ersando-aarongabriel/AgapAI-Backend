@@ -25,6 +25,8 @@ from app.schemas.session_schema import (
     SessionHistoryResponse,
     SessionListQuery,
     SessionRecordResponse,
+    SessionSampleRecord,
+    SessionSamplesPageResponse,
     SessionSummaryMetrics,
     SessionSummaryResponse,
     SessionStartRequest,
@@ -87,12 +89,15 @@ class SessionService:
         ]
 
         sample_count = len(normalized_samples)
+        mic_values = [float(s["mic_raw"]) for s in normalized_samples]
+        peak_mic = max(mic_values)
+        snore_threshold = 45.0 if peak_mic <= 120.0 else max(120.0, peak_mic * 0.30)
         chunk_stats = {
             "sample_count": sample_count,
-            "sum_mic_raw": sum(float(s["mic_raw"]) for s in normalized_samples),
+            "sum_mic_raw": sum(mic_values),
             "sum_mic_rms": sum(float(s["mic_rms"]) for s in normalized_samples),
             "max_mic_peak": max(float(s["mic_peak"]) for s in normalized_samples),
-            "snore_event_count": sum(1 for s in normalized_samples if float(s["mic_raw"]) >= 45.0),
+            "snore_event_count": sum(1 for value in mic_values if value >= snore_threshold),
             "sum_breathing_rate": sum(float(s["breathing_rate"]) for s in normalized_samples),
             "sum_temperature": sum(float(s["temperature"]) for s in normalized_samples),
             "sum_humidity": sum(float(s["humidity"]) for s in normalized_samples),
@@ -284,7 +289,40 @@ class SessionService:
         session = self.repository.get_session_by_id(session_id)
         if not session:
             raise SessionNotFoundError(f"Session '{session_id}' not found")
-        return SessionRecordResponse(**session)
+
+        response_payload = dict(session)
+        if not response_payload.get("sensor_events"):
+            # Backward compatibility: mirror stream samples into legacy sensor_events shape.
+            sample_count = int((session.get("stream_stats") or {}).get("sample_count") or 0)
+            if sample_count > 0:
+                limit = min(max(sample_count, 1), 2000)
+                sample_docs, total = self.repository.get_session_samples(session_id=session_id, limit=limit, skip=0)
+                response_payload["sensor_events"] = [
+                    {
+                        "recorded_at": item.get("recorded_at"),
+                        "mic_raw": item.get("mic_raw"),
+                        "mic_rms": item.get("mic_rms"),
+                        "mic_peak": item.get("mic_peak"),
+                        "temperature": item.get("temperature"),
+                        "humidity": item.get("humidity"),
+                        "breathing_rate": item.get("breathing_rate"),
+                        "movement_level": item.get("movement_level"),
+                        "presence_detected": item.get("presence_detected"),
+                        "received_at": item.get("received_at"),
+                        "chunk_id": item.get("chunk_id"),
+                    }
+                    for item in sample_docs
+                ]
+                if total > limit:
+                    response_payload["sensor_events"].append(
+                        {
+                            "note": "truncated",
+                            "returned": limit,
+                            "total": total,
+                        }
+                    )
+
+        return SessionRecordResponse(**response_payload)
 
     def list_sessions(self, query: SessionListQuery) -> SessionHistoryResponse:
         items, total = self.repository.list_sessions(limit=query.limit, skip=query.skip, device_id=query.device_id)
@@ -295,8 +333,35 @@ class SessionService:
         if not session:
             raise SessionNotFoundError(f"Session '{session_id}' not found")
 
+        analysis_session_doc = dict(session)
+        sensor_events = analysis_session_doc.get("sensor_events") or []
+        if not sensor_events:
+            sample_count = int((session.get("stream_stats") or {}).get("sample_count") or 0)
+            if sample_count > 0:
+                limit = min(max(sample_count, 1), 5000)
+                sample_docs, _ = self.repository.get_session_samples(
+                    session_id=session_id,
+                    limit=limit,
+                    skip=0,
+                )
+                analysis_session_doc["sensor_events"] = [
+                    {
+                        "recorded_at": item.get("recorded_at"),
+                        "breathing_rate": item.get("breathing_rate"),
+                        "snore_level": item.get("mic_raw"),
+                        "temperature": item.get("temperature"),
+                        "humidity": item.get("humidity"),
+                        "movement_level": item.get("movement_level"),
+                        "presence_detected": item.get("presence_detected"),
+                        "mic_raw": item.get("mic_raw"),
+                        "mic_rms": item.get("mic_rms"),
+                        "mic_peak": item.get("mic_peak"),
+                    }
+                    for item in sample_docs
+                ]
+
         result, ai_used = self.analysis_service.advanced_analysis(
-            session_doc=session,
+            session_doc=analysis_session_doc,
             focus_areas=payload.focus_areas,
             include_environmental_context=payload.include_environmental_context,
             include_behavioral_suggestions=payload.include_behavioral_suggestions,
@@ -405,3 +470,15 @@ class SessionService:
             )
 
         return DeviceSessionHistoryResponse(device_id=device_id, total=total, sessions=sessions)
+
+    def get_session_samples_page(self, session_id: str, limit: int = 200, skip: int = 0) -> SessionSamplesPageResponse:
+        session = self.repository.get_session_by_id(session_id)
+        if not session:
+            raise SessionNotFoundError(f"Session '{session_id}' not found")
+
+        rows, total = self.repository.get_session_samples(session_id=session_id, limit=limit, skip=skip)
+        return SessionSamplesPageResponse(
+            session_id=session_id,
+            total=total,
+            samples=[SessionSampleRecord(**row) for row in rows],
+        )

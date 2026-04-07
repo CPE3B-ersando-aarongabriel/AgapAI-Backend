@@ -71,10 +71,16 @@ const uint16_t HTTP_CONNECT_TIMEOUT_MS = 5000;
 const uint16_t HTTP_TIMEOUT_MS = 8000;
 const bool SERIAL_LOGS = true;
 
+// Mic normalization targets: convert tiny linear PCM magnitudes into a stable 0-100 scale.
+const float MIC_DB_MIN = -75.0f;
+const float MIC_DB_MAX = -20.0f;
+const uint8_t MIC_SILENT_REINIT_AFTER = 14;
+
 enum DeviceState {
   STATE_IDLE,
   STATE_CAPTURING,
   STATE_SUBMITTING,
+  STATE_RESULT,
   STATE_ERROR
 };
 
@@ -109,6 +115,23 @@ bool oledReady = false;
 String currentSessionId = "";
 RollingStats stats = {};
 
+// Keep a tiny retry queue so temporary network drops do not lose samples.
+const uint8_t PENDING_QUEUE_CAPACITY = 20;
+SensorSample pendingQueue[PENDING_QUEUE_CAPACITY];
+uint8_t pendingCount = 0;
+
+// Auto-select active I2S channel (0=left, 1=right) to avoid silent-channel setups.
+int activeMicChannel = -1;
+int activeMicDecode = -1;
+uint8_t micSilentStreak = 0;
+
+float lastValidTemp = 25.0f;
+float lastValidHum = 50.0f;
+uint32_t lastDhtWarnMs = 0;
+
+String latestRecommendation = "";
+String latestBreathingLine = "";
+
 bool buttonLastRawState = HIGH;
 bool buttonStableState = HIGH;
 uint32_t lastDebounceMs = 0;
@@ -126,6 +149,7 @@ const char* stateName(DeviceState s) {
     case STATE_IDLE: return "IDLE";
     case STATE_CAPTURING: return "CAPTURING";
     case STATE_SUBMITTING: return "SUBMITTING";
+    case STATE_RESULT: return "RESULT";
     case STATE_ERROR: return "ERROR";
     default: return "UNKNOWN";
   }
@@ -192,6 +216,11 @@ String iso8601FromEpochMs(uint64_t epochMs) {
     tmUtc.tm_sec
   );
   return String(buf);
+}
+
+String clipText(const String& s, size_t maxLen = 21) {
+  if (s.length() <= maxLen) return s;
+  return s.substring(0, maxLen);
 }
 
 // =========================
@@ -292,7 +321,7 @@ void initI2S() {
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate = 16000;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
@@ -327,7 +356,24 @@ void initI2S() {
   }
 
   i2s_zero_dma_buffer(I2S_PORT);
+  activeMicChannel = -1;
+  activeMicDecode = -1;
+  micSilentStreak = 0;
   logLine("[I2S] Ready");
+}
+
+float mapDbToScore(float dbfs) {
+  float normalized = (dbfs - MIC_DB_MIN) / (MIC_DB_MAX - MIC_DB_MIN);
+  if (normalized < 0.0f) normalized = 0.0f;
+  if (normalized > 1.0f) normalized = 1.0f;
+  return normalized * 100.0f;
+}
+
+int32_t signExtend24(uint32_t v) {
+  if (v & 0x00800000UL) {
+    v |= 0xFF000000UL;
+  }
+  return (int32_t)v;
 }
 
 void readMicMetrics(float& micRaw, float& micRms, float& micPeak) {
@@ -351,21 +397,97 @@ void readMicMetrics(float& micRaw, float& micRms, float& micPeak) {
     return;
   }
 
-  double sumAbs = 0.0;
-  double sumSq = 0.0;
-  double peak = 0.0;
-
-  for (int i = 0; i < count; i++) {
-    double x = (double)(buffer[i] >> 8) / 8388608.0;
-    double a = fabs(x);
-    sumAbs += a;
-    sumSq += x * x;
-    if (a > peak) peak = a;
+  int frames = count / 2;
+  if (frames <= 0) {
+    micRaw = 0.0f;
+    micRms = 0.0f;
+    micPeak = 0.0f;
+    return;
   }
 
-  micRaw = (float)((sumAbs / (double)count) * 100.0);
-  micRms = (float)(sqrt(sumSq / (double)count) * 100.0);
-  micPeak = (float)(peak * 100.0);
+  double sumAbs[6] = {0, 0, 0, 0, 0, 0};
+  double sumSq[6] = {0, 0, 0, 0, 0, 0};
+  double peak[6] = {0, 0, 0, 0, 0, 0};
+
+  for (int i = 0; i < frames; i++) {
+    int32_t rawL = buffer[2 * i];
+    int32_t rawR = buffer[2 * i + 1];
+
+    double candidates[6] = {
+      (double)(rawL >> 8) / 8388608.0,                                  // left, high 24 bits
+      (double)(rawR >> 8) / 8388608.0,                                  // right, high 24 bits
+      (double)signExtend24((uint32_t)rawL & 0x00FFFFFFUL) / 8388608.0,  // left, low 24 bits
+      (double)signExtend24((uint32_t)rawR & 0x00FFFFFFUL) / 8388608.0,  // right, low 24 bits
+      (double)rawL / 2147483648.0,                                       // left, full 32-bit
+      (double)rawR / 2147483648.0                                        // right, full 32-bit
+    };
+
+    for (int j = 0; j < 6; j++) {
+      double x = candidates[j];
+      double a = fabs(x);
+      sumAbs[j] += a;
+      sumSq[j] += x * x;
+      if (a > peak[j]) peak[j] = a;
+    }
+  }
+
+  float rmsCandidates[6];
+  for (int j = 0; j < 6; j++) {
+    rmsCandidates[j] = (float)sqrt(sumSq[j] / (double)frames);
+  }
+
+  int bestIdx = 0;
+  for (int j = 1; j < 6; j++) {
+    if (rmsCandidates[j] > rmsCandidates[bestIdx]) {
+      bestIdx = j;
+    }
+  }
+
+  if (bestIdx != activeMicDecode) {
+    activeMicDecode = bestIdx;
+    const char* decodeLabel =
+      (bestIdx == 0) ? "L_hi24" :
+      (bestIdx == 1) ? "R_hi24" :
+      (bestIdx == 2) ? "L_lo24" :
+      (bestIdx == 3) ? "R_lo24" :
+      (bestIdx == 4) ? "L_i32" : "R_i32";
+    activeMicChannel = (bestIdx % 2 == 0) ? 0 : 1;
+    logLine(String("[I2S] decode -> ") + decodeLabel + " channel=" + (activeMicChannel == 0 ? "LEFT" : "RIGHT"));
+  }
+
+  double avgAbsLinear = sumAbs[bestIdx] / (double)frames;
+  double rmsLinear = rmsCandidates[bestIdx];
+  double peakLinear = peak[bestIdx];
+
+  if (rmsLinear < 1e-9 && peakLinear < 1e-9) {
+    micSilentStreak++;
+  } else {
+    micSilentStreak = 0;
+  }
+
+  if (micSilentStreak >= MIC_SILENT_REINIT_AFTER) {
+    logLine("[I2S] sustained silence detected, restarting I2S");
+    i2s_driver_uninstall(I2S_PORT);
+    initI2S();
+    micSilentStreak = 0;
+  }
+
+  float rawDb = 20.0f * log10f(fmaxf((float)avgAbsLinear, 1e-9f));
+  float rmsDb = 20.0f * log10f(fmaxf((float)rmsLinear, 1e-9f));
+  float peakDb = 20.0f * log10f(fmaxf((float)peakLinear, 1e-9f));
+
+  micRaw = mapDbToScore(rawDb);
+  micRms = mapDbToScore(rmsDb);
+  micPeak = mapDbToScore(peakDb);
+
+  if (SERIAL_LOGS) {
+    logLine(
+      String("[MIC] lin_rms=") + String((float)rmsLinear, 6) +
+      " (" + String(rmsDb, 1) + " dBFS)" +
+      " score_rms=" + String(micRms, 1) +
+      " peak=" + String(micPeak, 1)
+    );
+  }
 
   if (micRaw < 0.0f) micRaw = 0.0f;
   if (micRms < 0.0f) micRms = 0.0f;
@@ -520,6 +642,7 @@ bool sendChunk(const SensorSample& s) {
 
   StaticJsonDocument<1024> req;
   req["session_id"] = currentSessionId;
+  req["chunk_id"] = String(DEVICE_ID) + "-" + String((unsigned long)(s.epoch_ms & 0xFFFFFFFFUL), HEX);
 
   JsonArray samples = req.createNestedArray("samples");
   JsonObject row = samples.createNestedObject();
@@ -545,6 +668,51 @@ bool sendChunk(const SensorSample& s) {
   }
 
   return true;
+}
+
+bool enqueuePending(const SensorSample& s) {
+  if (pendingCount >= PENDING_QUEUE_CAPACITY) {
+    // Drop oldest and keep newest to preserve recent continuity.
+    for (uint8_t i = 1; i < pendingCount; i++) {
+      pendingQueue[i - 1] = pendingQueue[i];
+    }
+    pendingQueue[pendingCount - 1] = s;
+    logLine("[CHUNK] pending queue full, dropped oldest sample");
+    return false;
+  }
+
+  pendingQueue[pendingCount] = s;
+  pendingCount++;
+  logLine(String("[CHUNK] queued pending count=") + String(pendingCount));
+  return true;
+}
+
+bool flushOnePendingSample() {
+  if (pendingCount == 0) return true;
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  if (!sendChunk(pendingQueue[0])) {
+    return false;
+  }
+
+  for (uint8_t i = 1; i < pendingCount; i++) {
+    pendingQueue[i - 1] = pendingQueue[i];
+  }
+  pendingCount--;
+  logLine(String("[CHUNK] flushed one pending, left=") + String(pendingCount));
+  return true;
+}
+
+void flushPendingWithBudget(uint32_t budgetMs) {
+  uint32_t start = millis();
+  while (pendingCount > 0 && (millis() - start) < budgetMs) {
+    if (!flushOnePendingSample()) {
+      delay(80);
+      ensureWiFiConnected();
+      continue;
+    }
+    delay(25);
+  }
 }
 
 bool endSession() {
@@ -593,12 +761,26 @@ bool endSession() {
     return false;
   }
 
-  StaticJsonDocument<1024> res;
+  DynamicJsonDocument res(4096);
   if (deserializeJson(res, response) == DeserializationError::Ok) {
     const char* rec1 = res["recommendations"][0] | "Done";
-    drawOled("Session ended", String("n=") + String(stats.sample_count), String(rec1));
+    const char* patternLabel = res["breathing_pattern"]["label"] | "Breathe";
+    int inhale = res["breathing_pattern"]["inhale_seconds"] | 4;
+    int hold = res["breathing_pattern"]["hold_seconds"] | 0;
+    int exhale = res["breathing_pattern"]["exhale_seconds"] | 6;
+
+    latestRecommendation = String(rec1);
+    latestBreathingLine = String(patternLabel) + " " + String(inhale) + "-" + String(hold) + "-" + String(exhale);
+
+    drawOled(
+      String("Ended n=") + String(stats.sample_count),
+      clipText(String("Rec: ") + latestRecommendation),
+      clipText(String("Breath: ") + latestBreathingLine)
+    );
   } else {
-    drawOled("Session ended", String("n=") + String(stats.sample_count));
+    latestRecommendation = "Session complete";
+    latestBreathingLine = "4-0-6 nasal";
+    drawOled("Session ended", String("n=") + String(stats.sample_count), "Resp parse fallback");
   }
 
   return true;
@@ -616,6 +798,7 @@ void resetStats() {
   stats.sum_breathing_rate = 0.0;
   stats.sum_temperature = 0.0;
   stats.sum_humidity = 0.0;
+  pendingCount = 0;
   lastSampleMs = 0;
   logLine("[CAPTURE] Rolling stats reset");
 }
@@ -623,8 +806,25 @@ void resetStats() {
 bool collectSample(SensorSample& out) {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
-  if (isnan(t)) t = 25.0f;
-  if (isnan(h)) h = 50.0f;
+  if (!isnan(t)) {
+    lastValidTemp = t;
+  } else {
+    t = lastValidTemp;
+    if (millis() - lastDhtWarnMs > 6000) {
+      lastDhtWarnMs = millis();
+      logLine("[DHT] Temperature read failed; using last valid value");
+    }
+  }
+
+  if (!isnan(h)) {
+    lastValidHum = h;
+  } else {
+    h = lastValidHum;
+    if (millis() - lastDhtWarnMs > 6000) {
+      lastDhtWarnMs = millis();
+      logLine("[DHT] Humidity read failed; using last valid value");
+    }
+  }
 
   float micRaw = 0.0f;
   float micRms = 0.0f;
@@ -736,7 +936,7 @@ void setup() {
   initI2S();
   resetStats();
 
-  drawOled("Ready", "Press button", "to start stream");
+  drawOled("Ready", "Click1: Start", "Click2: Stop");
   logLine("[BOOT] Setup complete");
 }
 
@@ -754,14 +954,25 @@ void loop() {
       } else {
         resetStats();
         setState(STATE_CAPTURING);
-        drawOled("Streaming...", "Press to stop");
+        drawOled("Streaming...", "Click2: Stop", "T/H/BR visible");
       }
     } else if (currentState == STATE_CAPTURING) {
       setState(STATE_SUBMITTING);
+    } else if (currentState == STATE_RESULT) {
+      currentSessionId = "";
+      latestRecommendation = "";
+      latestBreathingLine = "";
+      resetStats();
+      setState(STATE_IDLE);
+      drawOled("Ready", "Click1: Start", "Click2: Stop");
     }
   }
 
   if (currentState == STATE_CAPTURING) {
+    if (pendingCount > 0) {
+      flushOnePendingSample();
+    }
+
     if ((millis() - lastSampleMs) >= SAMPLE_INTERVAL_MS) {
       lastSampleMs = millis();
 
@@ -770,27 +981,37 @@ void loop() {
         updateStats(s);
 
         bool sent = sendChunk(s);
+        if (!sent) {
+          enqueuePending(s);
+        }
         logLine(String("[CHUNK] sent=") + (sent ? "1" : "0") + " count=" + String(stats.sample_count));
 
         drawOled(
           "Streaming...",
-          String("n=") + String(stats.sample_count) + " mic=" + String(s.mic_raw, 1),
-          String("P=") + (s.presence_detected ? "1" : "0")
+          String("n:") + String(stats.sample_count) + " m:" + String(s.mic_raw, 1) + " P:" + (s.presence_detected ? "1" : "0"),
+          String("T:") + String(s.temperature, 1) + " H:" + String(s.humidity, 0) + " BR:" + String(s.breathing_rate, 0)
         );
       }
     }
   }
 
   if (currentState == STATE_SUBMITTING) {
-    drawOled("Ending session...", String("n=") + String(stats.sample_count));
+    drawOled("Ending session...", String("n=") + String(stats.sample_count), String("pending=") + String(pendingCount));
+
+    flushPendingWithBudget(12000);
+    if (pendingCount > 0) {
+      logLine(String("[END] warning unsent pending=") + String(pendingCount));
+    }
 
     bool ok = endSession();
     if (ok) {
-      setState(STATE_IDLE);
-      currentSessionId = "";
-      resetStats();
-      drawOled("Done", "Press to capture");
-      logLine("[LOOP] End success -> IDLE");
+      setState(STATE_RESULT);
+      drawOled(
+        String("Done n=") + String(stats.sample_count),
+        clipText(String("Rec: ") + latestRecommendation),
+        clipText(String("B: ") + latestBreathingLine)
+      );
+      logLine("[LOOP] End success -> RESULT");
     } else {
       setState(STATE_ERROR);
       drawOled("End failed", "Press retry");

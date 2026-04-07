@@ -15,6 +15,7 @@ AGAPAI backend receives sleep-session telemetry from ESP32, stores session data 
 - `POST /api/session/end`
 - `GET /api/session/{id}/live`
 - `GET /api/session/{id}/summary`
+- `GET /api/session/{id}/samples`
 - `GET /api/device/{device_id}/sessions`
 - `POST /api/session/data` (legacy compatibility)
 - `GET /api/session/{id}`
@@ -65,6 +66,8 @@ Response includes final recommendations + breathing guide.
   - lightweight live counters and running averages while session is active.
 - `GET /api/session/{id}/summary`
   - finalized summary view (device/backend/final summary blocks).
+- `GET /api/session/{id}/samples`
+  - paged sample stream for charts, raw trend rendering, and diagnostics.
 - `GET /api/device/{device_id}/sessions`
   - efficient historical summaries for mobile list screens.
 

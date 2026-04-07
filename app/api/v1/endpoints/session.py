@@ -20,6 +20,7 @@ from app.schemas.session_schema import (
 	SessionLiveStatusResponse,
 	SessionListQuery,
 	SessionRecordResponse,
+	SessionSamplesPageResponse,
 	SessionSummaryResponse,
 	SessionStartRequest,
 	SessionStartResponse,
@@ -83,6 +84,19 @@ def get_session(
 ) -> SessionRecordResponse:
 	try:
 		return service.get_session(session_id)
+	except SessionNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc
+
+
+@router.get("/session/{session_id}/samples", response_model=SessionSamplesPageResponse)
+def get_session_samples(
+	session_id: str,
+	limit: int = Query(default=200, ge=1, le=2000),
+	skip: int = Query(default=0, ge=0),
+	service: SessionService = Depends(get_session_service),
+) -> SessionSamplesPageResponse:
+	try:
+		return service.get_session_samples_page(session_id=session_id, limit=limit, skip=skip)
 	except SessionNotFoundError as exc:
 		raise NotFoundError(str(exc)) from exc
 

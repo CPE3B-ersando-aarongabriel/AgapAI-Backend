@@ -26,7 +26,16 @@ def normalize_sensor_value(value: float, precision: int = 2) -> float:
 
 def normalize_sensor_payload(payload: dict) -> dict:
 	normalized = dict(payload)
-	for key in ("breathing_rate", "snore_level", "temperature", "humidity", "movement_level"):
+	for key in (
+		"breathing_rate",
+		"snore_level",
+		"temperature",
+		"humidity",
+		"movement_level",
+		"mic_raw",
+		"avg_mic_raw",
+		"max_mic_raw",
+	):
 		if normalized.get(key) is not None:
 			normalized[key] = normalize_sensor_value(normalized[key])
 	return normalized

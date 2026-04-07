@@ -109,8 +109,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
   - Creates a new session and returns `session_id`
 
 - `POST /api/session/data`
-  - Accepts sensor sample:
+  - Accepts either scalar summary sample or buffered `capture_samples` list.
+  - Scalar example:
   - `{session_id, breathing_rate, snore_level, temperature, humidity, movement_level?, presence_detected?}`
+  - Capture-window example includes `capture_samples` with per-interval timestamps and `mic_raw`.
   - Stores sample
   - Runs pre-analysis
   - Optionally calls OpenAI
@@ -129,6 +131,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `GET /api/dashboard`
   - Aggregated analytics across sessions
   - Average breathing rate/snore level, trends, and recent highlights
+
+- `POST /api/insight/chat`
+  - Context-aware sleep insight Q&A grounded in stored backend data
+  - Supports generic, device-scoped, or session-scoped questions
 
 ### Utility
 

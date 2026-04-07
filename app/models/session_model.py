@@ -24,6 +24,7 @@ def build_session_document(
 		"latest_pre_analysis": None,
 		"latest_device_response": None,
 		"advanced_analysis": None,
+		"insight_history": [],
 	}
 
 

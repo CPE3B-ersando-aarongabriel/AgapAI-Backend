@@ -19,15 +19,62 @@ class SessionStartResponse(BaseModel):
 	started_at: datetime
 
 
-class SensorDataIn(BaseModel):
-	session_id: str = Field(..., min_length=8, max_length=64)
-	breathing_rate: float = Field(..., ge=0.0, le=60.0)
-	snore_level: float = Field(..., ge=0.0, le=100.0)
+class CaptureSampleIn(BaseModel):
+	recorded_at: datetime
+	mic_raw: float = Field(..., ge=0.0)
+	mic_rms: float | None = Field(default=None, ge=0.0)
+	mic_peak: float | None = Field(default=None, ge=0.0)
 	temperature: float = Field(..., ge=5.0, le=45.0)
 	humidity: float = Field(..., ge=0.0, le=100.0)
+	breathing_rate: float | None = Field(default=None, ge=0.0, le=60.0)
 	movement_level: float | None = Field(default=None, ge=0.0, le=100.0)
 	presence_detected: bool | None = None
+
+
+class CaptureWindowSummary(BaseModel):
+	sample_count: int = Field(..., ge=1)
+	window_started_at: datetime
+	window_ended_at: datetime
+	avg_mic_raw: float = Field(..., ge=0.0)
+	max_mic_raw: float = Field(..., ge=0.0)
+
+
+class AudioSummaryIn(BaseModel):
+	sample_count: int = Field(..., ge=1)
+	average_amplitude: float = Field(..., ge=0.0)
+	rms_amplitude: float = Field(..., ge=0.0)
+	peak_intensity: float = Field(..., ge=0.0)
+	snore_event_count: int = Field(..., ge=0)
+	snore_score: float = Field(..., ge=0.0, le=100.0)
+
+
+class SensorDataIn(BaseModel):
+	session_id: str = Field(..., min_length=8, max_length=64)
+	breathing_rate: float | None = Field(default=None, ge=0.0, le=60.0)
+	snore_level: float | None = Field(default=None, ge=0.0, le=100.0)
+	temperature: float | None = Field(default=None, ge=5.0, le=45.0)
+	humidity: float | None = Field(default=None, ge=0.0, le=100.0)
+	movement_level: float | None = Field(default=None, ge=0.0, le=100.0)
+	presence_detected: bool | None = None
+	mic_raw: float | None = Field(default=None, ge=0.0)
+	audio_summary: AudioSummaryIn | None = None
+	capture_samples: list[CaptureSampleIn] = Field(default_factory=list)
 	recorded_at: datetime | None = None
+
+	@model_validator(mode="after")
+	def validate_sensor_or_capture_payload(self) -> "SensorDataIn":
+		has_capture_samples = len(self.capture_samples) > 0
+		has_scalar_summary = all(
+			value is not None
+			for value in (self.breathing_rate, self.snore_level, self.temperature, self.humidity)
+		)
+
+		if not has_capture_samples and not has_scalar_summary:
+			raise ValueError(
+				"Provide either scalar summary values (breathing_rate/snore_level/temperature/humidity) "
+				"or a non-empty capture_samples list."
+			)
+		return self
 
 
 class BreathingPatternGuide(BaseModel):
@@ -50,6 +97,8 @@ class DeviceDataResponse(BaseModel):
 	breathing_pattern: BreathingPatternGuide
 	pre_analysis: RuleBasedSummary
 	ai_used: bool = False
+	capture_window_summary: CaptureWindowSummary | None = None
+	audio_summary: AudioSummaryIn | None = None
 
 
 class SessionRecordResponse(BaseModel):
@@ -62,6 +111,7 @@ class SessionRecordResponse(BaseModel):
 	latest_pre_analysis: dict[str, Any] | None = None
 	latest_device_response: dict[str, Any] | None = None
 	advanced_analysis: dict[str, Any] | None = None
+	insight_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SessionHistoryResponse(BaseModel):

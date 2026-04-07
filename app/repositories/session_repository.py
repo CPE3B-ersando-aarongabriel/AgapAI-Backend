@@ -59,6 +59,14 @@ class SessionRepository:
         doc = self.collection.find_one({"session_id": session_id})
         return sanitize_mongo_document(doc)
 
+    def get_latest_session(self, device_id: str | None = None) -> dict[str, Any] | None:
+        query: dict[str, Any] = {}
+        if device_id:
+            query["device_id"] = device_id
+
+        doc = self.collection.find_one(query, sort=[("updated_at", DESCENDING)])
+        return sanitize_mongo_document(doc)
+
     def list_sessions(self, limit: int, skip: int, device_id: str | None = None) -> tuple[list[dict[str, Any]], int]:
         query: dict[str, Any] = {}
         if device_id:
@@ -74,10 +82,25 @@ class SessionRepository:
         total = self.collection.count_documents(query)
         return [item for item in items if item is not None], total
 
-    def dashboard_aggregate(self) -> dict[str, Any]:
-        total_sessions = self.collection.count_documents({})
+    def append_insight_history(self, session_id: str, entry: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+        self.collection.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {"updated_at": now},
+                "$push": {"insight_history": entry},
+            },
+        )
+        return self.get_session_by_id(session_id)
+
+    def dashboard_aggregate(self, device_id: str | None = None) -> dict[str, Any]:
+        query: dict[str, Any] = {}
+        if device_id:
+            query["device_id"] = device_id
+
+        total_sessions = self.collection.count_documents(query)
 
         avg_pipeline = [
+            {"$match": query},
             {"$unwind": {"path": "$sensor_events", "preserveNullAndEmptyArrays": False}},
             {
                 "$group": {
@@ -91,13 +114,14 @@ class SessionRepository:
         averages = avg_result[0] if avg_result else {"avg_breathing_rate": 0.0, "avg_snore_level": 0.0}
 
         latest_docs = (
-            self.collection.find({})
+            self.collection.find(query)
             .sort("updated_at", DESCENDING)
             .limit(5)
         )
         latest = [sanitize_mongo_document(doc) for doc in latest_docs]
 
         trend_pipeline = [
+            {"$match": query},
             {"$unwind": {"path": "$sensor_events", "preserveNullAndEmptyArrays": False}},
             {
                 "$addFields": {

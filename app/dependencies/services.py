@@ -5,6 +5,7 @@ from functools import lru_cache
 from app.config.database import get_sessions_collection
 from app.repositories.session_repository import SessionRepository
 from app.services.analysis_service import AnalysisService
+from app.services.insight_service import InsightService
 from app.services.session_service import SessionService
 
 
@@ -18,3 +19,14 @@ def _build_service() -> SessionService:
 
 def get_session_service() -> SessionService:
     return _build_service()
+
+
+@lru_cache
+def _build_insight_service() -> InsightService:
+    repo = SessionRepository(get_sessions_collection())
+    repo.ensure_indexes()
+    return InsightService(repository=repo)
+
+
+def get_insight_service() -> InsightService:
+    return _build_insight_service()

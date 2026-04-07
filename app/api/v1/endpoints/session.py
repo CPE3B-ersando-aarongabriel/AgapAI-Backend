@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies.services import get_session_service
+from app.dependencies.services import get_insight_service, get_session_service
 from app.exceptions.custom_exceptions import NotFoundError
+from app.schemas.insight_schema import InsightChatRequest, InsightChatResponse
 from app.schemas.session_schema import (
 	AdvancedAnalysisRequest,
 	AdvancedAnalysisResponse,
@@ -16,6 +17,7 @@ from app.schemas.session_schema import (
 	SessionStartRequest,
 	SessionStartResponse,
 )
+from app.services.insight_service import InsightContextNotFoundError, InsightService
 from app.services.session_service import SessionNotFoundError, SessionService
 
 
@@ -77,3 +79,14 @@ def run_advanced_analysis(
 @router.get("/dashboard", response_model=DashboardResponse)
 def get_dashboard(service: SessionService = Depends(get_session_service)) -> DashboardResponse:
 	return service.dashboard()
+
+
+@router.post("/insight/chat", response_model=InsightChatResponse)
+def ask_sleep_insight(
+	payload: InsightChatRequest,
+	service: InsightService = Depends(get_insight_service),
+) -> InsightChatResponse:
+	try:
+		return service.ask(payload)
+	except InsightContextNotFoundError as exc:
+		raise NotFoundError(str(exc)) from exc

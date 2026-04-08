@@ -13,3 +13,8 @@ class NotFoundError(AppError):
 class ConflictError(AppError):
     def __init__(self, message: str):
         super().__init__(message=message, status_code=409)
+
+
+class ServiceUnavailableError(AppError):
+    def __init__(self, message: str = "Service is temporarily unavailable"):
+        super().__init__(message=message, status_code=503)

@@ -32,7 +32,7 @@ class Settings:
     enable_ai_pre_analysis: bool = os.getenv("ENABLE_AI_PRE_ANALYSIS", "true").lower() == "true"
 
     host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = int(os.getenv("PORT", "8000"))
+    port: int = int(os.getenv("PORT", "10000"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     @property

@@ -16,6 +16,17 @@ class FakeService:
         }
 
 
+def test_root_supports_get_and_head():
+    client = TestClient(app)
+
+    get_response = client.get("/")
+    assert get_response.status_code == 200
+    assert get_response.json()["status"] == "ok"
+
+    head_response = client.head("/")
+    assert head_response.status_code == 200
+
+
 def test_session_start_endpoint_with_dependency_override():
     app.dependency_overrides[get_session_service] = lambda: FakeService()
     client = TestClient(app)

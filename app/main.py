@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import PyMongoError
 
@@ -69,10 +70,33 @@ def root() -> dict[str, str]:
 	}
 
 
+@app.head("/", include_in_schema=False)
+def root_head() -> Response:
+	return Response(status_code=200)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
 	return {"status": "healthy"}
 
 
+def _resolve_runtime_port() -> int:
+	raw_port = os.environ.get("PORT")
+	if not raw_port:
+		return settings.port
+	try:
+		return int(raw_port)
+	except ValueError:
+		logger.warning("Invalid PORT value '%s'; falling back to settings port %s", raw_port, settings.port)
+		return settings.port
+
+
+def _resolve_runtime_host() -> str:
+	return os.environ.get("HOST") or "0.0.0.0"
+
+
 if __name__ == "__main__":
-	uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=settings.environment == "development")
+	host = _resolve_runtime_host()
+	port = _resolve_runtime_port()
+	logger.info("Launching Uvicorn with host=%s port=%s", host, port)
+	uvicorn.run("app.main:app", host=host, port=port, reload=settings.environment == "development")

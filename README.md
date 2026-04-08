@@ -98,7 +98,7 @@ pip install -r requirements.txt
 3. Run API locally:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-10000}
 ```
 
 ## API Endpoints
@@ -154,6 +154,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### Utility
 
 - `GET /`
+- `HEAD /`
 - `GET /health`
 
 ## MongoDB Atlas Setup
@@ -203,6 +204,45 @@ Recommended startup/deploy values on Render:
 - `STARTUP_DB_CHECK=true`
 - `STARTUP_DB_CHECK_STRICT=false` (keeps service booting while Atlas connectivity is being fixed)
 - `MONGO_SERVER_SELECTION_TIMEOUT_MS=8000`
+
+## Railway Deployment
+
+This repo includes Railway-ready config files:
+
+- `railway.toml` (Nixpacks builder, start command, health check)
+- `Procfile` (`web: python -m app.main` fallback process type)
+- `.env.railway.example` (deployment environment template)
+
+### Railway setup steps
+
+1. Create a new Railway project and link this repository.
+2. In service settings, confirm the root is this repository and deploy.
+3. Railway will detect Python from `requirements.txt` and `.python-version`.
+4. Keep start command as `python -m app.main` (or leave default from `railway.toml`).
+5. Set environment variables from `.env.railway.example`.
+6. Do not manually set `PORT`; Railway injects it automatically.
+7. Confirm health check path is `/health`.
+
+### Required Railway variables
+
+- `ENVIRONMENT=production`
+- `MONGO_URI`
+- `MONGO_DB_NAME`
+- `MONGO_SERVER_SELECTION_TIMEOUT_MS=8000`
+- `STARTUP_DB_CHECK=true`
+- `STARTUP_DB_CHECK_STRICT=false`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL=gpt-4.1-mini`
+- `ENABLE_AI_PRE_ANALYSIS=true`
+- `CORS_ORIGINS` (your frontend domain)
+- `HOST=0.0.0.0`
+- `LOG_LEVEL=INFO`
+
+### Notes
+
+- Root endpoint supports both `GET /` and `HEAD /`.
+- Health endpoint is `GET /health`.
+- If MongoDB is temporarily unavailable, DB-backed routes return `503` with a structured error body.
 
 ## Testing
 
